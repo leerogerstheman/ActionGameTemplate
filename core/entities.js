@@ -14,6 +14,7 @@ class Hitbox {
     this.launch = !!p.launch; this.life = p.life || 0.1; this.t = 0;
     this.team = p.team; this.dir = p.dir || 1; this.sfx = p.sfx || 'hit';
     this.sc = p.sc || 3; this.pierce = !!p.pierce; this.color = p.color || '#fff';
+    this.slow = p.slow || 0; this.freeze = p.freeze || 0;   // 附加控制效果
     this.hits = new Set(); this.dead = false; this.drawFx = true;
     if (p.follow) {  // 判定体跟随宿主移动（用于冲锋等持续位移攻击）
       this.follow = p.follow; this.foff = this.x - p.follow.x;
@@ -45,6 +46,7 @@ class Projectile {
       dmg: p.dmg || 0, team: p.team, color: p.color || '#fff', life: p.life || 2,
       kind: p.kind || 'bolt', trail: p.trail || null, sc: p.sc || 4,
       chain: p.chain || 0, leech: p.leech || 0, blast: p.blast || 0,
+      slow: p.slow || 0, freeze: p.freeze || 0,
       pierce: !!p.pierce, t: 0, dead: false, hitset: new Set(), src: p.src || null,
     });
   }
@@ -96,7 +98,7 @@ class Shock {
     this.r0 = p.r0 || 20; this.r1 = p.r1 || 300; this.dur = p.dur || 0.4;
     this.dmg = p.dmg || 0; this.ky = p.ky || 0; this.color = p.color || '#fff';
     this.sc = p.sc || 5; this.tall = p.tall || 1; this.t = 0; this.dead = false;
-    this.hitset = new Set();
+    this.hitset = new Set(); this.freeze = p.freeze || 0; this.slow = p.slow || 0;
   }
   get r() { return UT.lerp(this.r0, this.r1, Math.min(1, this.t / this.dur)); }
   update(dt) { this.t += dt; if (this.t >= this.dur) this.dead = true; }
@@ -119,6 +121,7 @@ class Beam {
     this.dur = p.dur || 0.35; this.dmg = p.dmg || 10; this.color = p.color || '#ffd23c';
     this.team = p.team; this.t = 0; this.dead = false; this.hitset = new Set();
     this.sc = p.sc || 6; this.boomed = false;
+    this.freeze = p.freeze || 0; this.slow = p.slow || 0;
   }
   update(dt) {
     this.t += dt;
@@ -356,7 +359,10 @@ class Player extends Actor {
       }
       case 'hurt': {
         this.t += dt; this.vx *= Math.pow(0.1, dt);
-        if (this.t >= 0.32) this.state = 'free';
+        if (this.t >= 0.32) {
+          this.state = 'free';
+          this.invuln = Math.max(this.invuln, 0.45);  // 受击后短无敌，防止围殴无限连
+        }
         break;
       }
     }
@@ -466,11 +472,17 @@ class Enemy extends Actor {
     if (this.fly) { this.hoverY = CONFIG.FLOOR - (def.hover || 170); }
     this.state = 'chase'; this.t = 0; this.cur = null; this.atkCd = UT.rand(0.5, 1.4);
     this.seqIdx = 0; this.armorF = def.armorF || 0;
+    this.spd0 = def.spd; this.slowT = 0;
     this.name = def.name;
   }
+  applySlow(sec) { this.slowT = Math.max(this.slowT || 0, sec); this.spd = this.spd0 * 0.45; }
   update(dt) {
     this.flash = Math.max(0, this.flash - dt);
     this.atkCd -= dt; this.stun -= dt;
+    if (this.slowT > 0) {
+      this.slowT -= dt;
+      if (this.slowT <= 0) { this.spd = this.spd0; }
+    }
     if (this.dead) return;
     const P = G.player;
     // 浮空/眩晕：无法行动（飞行单位因悬浮本就不落地，不算浮空）
@@ -492,7 +504,12 @@ class Enemy extends Actor {
           if (Math.random() < dt * 2) G.fx.trail(this.x, this.y - 4, this.def.col.c2, 3);
         } else {
           this.vx = Math.sin(this.age * 3) * this.spd * 0.3;
-          if (this.atkCd <= 0) this._begin();
+          if (this.atkCd <= 0) {
+            // 攻击令牌编排：同时最多 2 名杂兵出手，其余围观（精英/Boss 不受限）
+            if (!this.elite && !this.boss && G.attackers && G.attackers() >= 2) {
+              this.vx = Math.sin(this.age * 2.3) * this.spd * 0.4;
+            } else this._begin();
+          }
         }
         break;
       }
@@ -565,15 +582,17 @@ class Enemy extends Actor {
         SFX.play('roar'); G.banner(this.def.name + '：僭主号令！', '', 1.1);
         for (const id of c.spawn) G.spawn(id, UT.clamp(this.x + UT.rand(-260, 260), CONFIG.XMIN, CONFIG.XMAX));
         break;
-      case 'blink':
+      case 'blink': {
         SFX.play('dodge');
         G.fx.spark(this.x, this.y - this.h * 0.5, this.def.col.c2, 18, 380);
-        this.x = UT.clamp(P.x - P.facing * 120, CONFIG.XMIN, CONFIG.XMAX);
+        this.x = UT.clamp(P.x - P.facing * 130, CONFIG.XMIN, CONFIG.XMAX);
         this.facing = Math.sign(P.x - this.x) || 1;
         G.fx.spark(this.x, this.y - this.h * 0.5, this.def.col.c2, 18, 380);
-        this.atkCd = 0.15; this.state = 'chase'; this.cur = this.def.atks ?
-          this.def.atks.cleave : this.cur;
+        // 闭环修复：瞬移后直接进入下一次斩击前摇，不落回 AI 主循环
+        this.cur = this.def.atks ? this.def.atks.cleave : this.def.atk;
+        this.state = 'tele'; this.t = this.cur.tele;
         return;   // 不进入 act
+      }
       case 'rain': {
         G.meteors(P.x + UT.rand(-90, 90), c.rain.n, c.rain.dmg, 'enemy', this.def.col.c2, 1.6);
         break;
@@ -797,6 +816,10 @@ function drawWeapon(ctx, type, c) {
     case 'gauntlet': ctx.fillStyle = c.c2;
       ctx.beginPath(); ctx.arc(14, 0, 9, 0, 7); ctx.fill();
       ctx.beginPath(); ctx.arc(-2, 2, 8, 0, 7); ctx.fill(); break;
+    case 'twin': ctx.lineWidth = 4; ctx.strokeStyle = c.c3;
+      ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(58, -12); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-2, 6); ctx.lineTo(-42, 16); ctx.stroke();
+      break;
   }
 }
 
@@ -925,9 +948,63 @@ function drawShape(ctx, e, def) {
       ctx.beginPath(); ctx.arc(-6, -H * 0.96, 3.4, 0, 7); ctx.arc(8, -H * 0.96, 3.4, 0, 7); ctx.fill();
       break;
     }
+    case 'lancer': {  // 骨瘦骷髅枪手
+      ctx.strokeStyle = c.c1; ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.moveTo(-3, -H * 0.35); ctx.lineTo(-5 + walk * 5, 0); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(3, -H * 0.35); ctx.lineTo(5 - walk * 5, 0); ctx.stroke();
+      ctx.fillStyle = c.c1;
+      ctx.fillRect(-5, -H * 0.82, 10, H * 0.5);
+      for (let i = 0; i < 3; i++) ctx.fillRect(-8, -H * (0.72 - i * 0.14), 16, 3);  // 肋骨
+      ctx.beginPath(); ctx.arc(0, -H * 0.9, 8, 0, 7); ctx.fill();
+      ctx.fillStyle = '#111214'; ctx.fillRect(-4.5, -H * 0.93, 9, 3);
+      ctx.fillStyle = c.eye; ctx.fillRect(-3.5, -H * 0.925, 2.5, 2.2); ctx.fillRect(1, -H * 0.925, 2.5, 2.2);
+      ctx.strokeStyle = '#ddd8c8'; ctx.lineWidth = 4;   // 骨矛
+      ctx.beginPath(); ctx.moveTo(-10, -H * 0.6); ctx.lineTo(32, -H * 0.46); ctx.stroke();
+      break;
+    }
+    case 'zealot': {  // 兜帽狂信徒
+      ctx.strokeStyle = c.c1; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.moveTo(-6, -H * 0.3); ctx.lineTo(-9 + walk * 10, 0); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(6, -H * 0.3); ctx.lineTo(9 - walk * 10, 0); ctx.stroke();
+      ctx.fillStyle = c.c1;
+      ctx.beginPath();
+      ctx.moveTo(-e.r, 0); ctx.quadraticCurveTo(-e.r * 0.6, -H * 0.75, 0, -H * 0.92);
+      ctx.quadraticCurveTo(e.r * 0.7, -H * 0.7, e.r, 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = c.c2; ctx.fillRect(-3, -H * 0.5, 6, H * 0.12);
+      ctx.fillStyle = c.eye;
+      ctx.beginPath(); ctx.arc(1, -H * 0.8, 3, 0, 7); ctx.fill();
+      ctx.strokeStyle = c.c2; ctx.lineWidth = 4;  // 弯刀
+      ctx.beginPath(); ctx.arc(22, -H * 0.55, 15, 0.6, 2.7); ctx.stroke();
+      break;
+    }
+    case 'mech': {  // 阿修罗机兵
+      ctx.fillStyle = c.c1;
+      roundRect(ctx, -e.r - 4, -H * 0.85, e.r * 2 + 8, H * 0.55, 8); ctx.fill();
+      ctx.fillStyle = c.c2;
+      ctx.fillRect(-e.r - 4, -H * 0.85, e.r * 2 + 8, 8);
+      ctx.fillStyle = '#40f0ff';   // 独眼
+      ctx.beginPath(); ctx.arc(8, -H * 0.62, 6, 0, 7); ctx.fill();
+      ctx.strokeStyle = c.c1; ctx.lineWidth = 10;
+      ctx.beginPath(); ctx.moveTo(-16, -H * 0.32); ctx.lineTo(-18, 0); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(16, -H * 0.32); ctx.lineTo(18, 0); ctx.stroke();
+      ctx.fillStyle = c.c1;        // 炮臂
+      ctx.fillRect(e.r, -H * 0.7, 30, 14);
+      ctx.fillStyle = c.c2;
+      ctx.fillRect(e.r + 24, -H * 0.72, 8, 18);
+      ctx.fillStyle = '#15151a';
+      ctx.fillRect(-e.r - 10, -6, e.r * 2 + 20, 6);
+      break;
+    }
   }
   ctx.restore();
 
+  // 减速状态蓝雾
+  if (e.slowT > 0) {
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = '#9fe8ff';
+    ctx.beginPath(); ctx.ellipse(e.x, e.y - e.h * 0.5, e.r + 10, e.h * 0.55, 0, 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
   // 精英光环
   if (def.seq) {
     ctx.globalAlpha = 0.35;

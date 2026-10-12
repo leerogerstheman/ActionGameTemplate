@@ -28,6 +28,9 @@ class Game {
     this.waveIdx = -1; this.pending = []; this.interT = 0;
     this.codeState = null; this.paused = false;
     this.deadT = 0; this.prevRank = 0;
+    this.endless = false; this.endlessN = 0; this.dScale = 1;  // 无尽深渊
+    this.dilT = 0;   // 时停领域（敌人行动放缓）
+    this.rankPop = 0; // 风格评级升级弹跳动画
     window.G = this;  // 数据层(角色技能/敌人AI)通过全局 G 调用 API
   }
   get warn() { return 0; }
@@ -57,10 +60,18 @@ class Game {
     }
   }
   spawn(id, x) {
-    if (id === 'boss') this.ens.push(new Boss(BOSS_DEF, x));
-    else if (ELITES[id]) this.ens.push(new Enemy(ELITES[id], x, true));
-    else if (MOBS[id]) this.ens.push(new Enemy(MOBS[id], x, false));
+    let e = null;
+    if (id === 'boss') e = new Boss(BOSS_DEF, x);
+    else if (ELITES[id]) e = new Enemy(ELITES[id], x, true);
+    else if (MOBS[id]) e = new Enemy(MOBS[id], x, false);
+    if (!e) return;
+    if (this.dScale > 1) { e.maxhp = Math.ceil(e.maxhp * this.dScale); e.hp = e.maxhp; }
+    this.ens.push(e);
     this.fx.ring(x, CONFIG.FLOOR - 10, '#ff5566', 12, 320);
+  }
+  /* 同时出手的杂兵数（攻击令牌编排） */
+  attackers() {
+    return this.ens.filter(e => !e.dead && !e.elite && !e.boss && (e.state === 'tele' || e.state === 'act')).length;
   }
   delayed(t, fn) { this.timers.push({ t, fn }); }
   slowmo(t, f = 0.4) { this.slowT = Math.max(this.slowT, t); this.slowF = f; }
@@ -92,9 +103,39 @@ class Game {
     this.combo = 0; this.maxCombo = 0; this.kills = 0; this.battleT = 0; this.dmgDealt = 0;
     this.waveIdx = -1; this.pending = []; this.interT = 0.01; this.codeState = null;
     this.paused = false; this.deadT = 0;
+    this.endless = false; this.endlessN = 0; this.dScale = 1; this.dilT = 0; this.rankPop = 0;
     this.scene = 'battle';
     this.banner(def.name, '敌方部队接近中！', 2.2);
     SFX.play('ok');
+  }
+  /* ---- 无尽深渊：胜利后可继续挑战，每波难度递增 ---- */
+  startEndless() {
+    if (!this.player) return;
+    this.endless = true; this.endlessN = 0; this.dScale = 1;
+    this.ens = []; this.pending = []; this.hitboxes = []; this.projs = []; this.props = []; this.timers = [];
+    this.player.dead = false; this.player.hp = this.player.maxhp; this.player.ult = 0;
+    this.player.state = 'free'; this.player.invuln = 1;
+    this.interT = 0.01; this.deadT = 0; this.paused = false;
+    this.scene = 'battle';
+    this.banner('无尽深渊', '每波难度递增——坚持到底，直到倒下', 2.4);
+    SFX.play('rankup');
+  }
+  genEndlessWave() {
+    this.endlessN++;
+    const spawns = [];
+    const bossWave = this.endlessN % 5 === 0;
+    const eliteWave = this.endlessN % 3 === 0;
+    if (bossWave) spawns.push(['boss', 1.2, 1020]);
+    if (eliteWave) spawns.push([UT.pick(['warden', 'shrieker', 'asura']), 0.6, UT.pick([220, 1020])]);
+    const mobIds = ['runner', 'imp', 'caster', 'brute', 'lancer', 'zealot'];
+    const n = 4 + Math.min(10, this.endlessN);
+    for (let i = 0; i < n; i++)
+      spawns.push([UT.pick(mobIds), 0.5 + i * 0.65 + UT.rand(0, 0.5), UT.pick([160, 300, 640, 950, 1120])]);
+    this.pending = spawns.map(s => ({ id: s[0], t: s[1], x: s[2] }));
+    this.dScale = 1 + this.endlessN * 0.12;
+    this.banner('无尽深渊 · 第 ' + this.endlessN + ' 波',
+      bossWave ? 'BOSS 波！凝神！' : eliteWave ? '精英波！注意走位' : '难度上升', 2.2);
+    if (this.player && !this.player.dead) this.player.heal(10);
   }
   toSelect() { this.scene = 'select'; this.player = null; this.ens = []; this.fx.p = []; this.fx.t = []; }
 
@@ -132,9 +173,7 @@ class Game {
         break;
       }
       case 'win': case 'lose': {
-        if (this.scene === 'lose' || (this.scene === 'win' && this.fx.p.length < 60)) {
-          // 胜利画面短暂延迟后可确认
-        }
+        if (this.scene === 'win' && input.pressed('s1')) { this.startEndless(); this.selT = 0; break; }
         if (input.pressed('confirm')) { SFX.play('ok'); this.toSelect(); }
         break;
       }
@@ -147,6 +186,8 @@ class Game {
     let dt = rdt * (this.slowT > 0 ? this.slowF : 1);
     if (this.codeState) dt *= 0.35;
     if (this.hitstop > 0) { this.hitstop -= rdt; dt *= 0.05; }
+    if (this.dilT > 0) this.dilT -= rdt;
+    const eDt = dt * (this.dilT > 0 ? 0.4 : 1);   // 时停领域：敌方时间轴放缓
     this.battleT += rdt;
 
     if (this.deadT > 0) {
@@ -159,13 +200,13 @@ class Game {
 
     /* --- 实体更新 --- */
     if (P) P.update(dt);
-    for (const e of this.ens) e.update(dt);
+    for (const e of this.ens) e.update(eDt);
     this.ens = this.ens.filter(e => !e.dead);
-    for (const h of this.hitboxes) h.update(dt);
+    for (const h of this.hitboxes) h.update(h.team === 'enemy' ? eDt : dt);
     this.hitboxes = this.hitboxes.filter(h => !h.dead);
-    for (const pr of this.projs) pr.update(dt);
+    for (const pr of this.projs) pr.update(pr.team === 'enemy' ? eDt : dt);
     this.projs = this.projs.filter(p => !p.dead);
-    for (const z of this.props) z.update(dt);
+    for (const z of this.props) z.update((z.team === 'enemy' && z instanceof Shock) ? eDt : dt);
     this.props = this.props.filter(z => !z.dead);
     for (let i = this.timers.length - 1; i >= 0; i--) {
       const q = this.timers[i]; q.t -= dt;
@@ -190,8 +231,9 @@ class Game {
     else s.pts = Math.max(0, s.pts - (16 + s.rank * 12) * rdt);
     let rk = 0;
     for (let i = RANKS.length - 1; i >= 0; i--) if (s.pts >= RANKS[i].m) { rk = i; break; }
-    if (rk > s.rank) { SFX.play('rankup'); }
+    if (rk > s.rank) { SFX.play('rankup'); this.rankPop = 1; }
     s.rank = rk;
+    this.rankPop = Math.max(0, this.rankPop - rdt * 2.4);
     this.comboT -= rdt;
     if (this.comboT <= 0) this.combo = 0;
 
@@ -244,10 +286,11 @@ class Game {
   }
 
   _updateWaves(rdt) {
-    const w = WAVES[this.waveIdx];
+    /* 波间过渡 */
     if (this.interT > 0) {
       this.interT -= rdt;
       if (this.interT <= 0) {
+        if (this.endless) { this.genEndlessWave(); return; }
         this.waveIdx++;
         if (this.waveIdx >= WAVES.length) {
           this.scene = 'win';
@@ -266,20 +309,23 @@ class Game {
       const q = this.pending[i]; q.t -= rdt;
       if (q.t <= 0) { this.spawn(q.id, q.x); this.pending.splice(i, 1); }
     }
-    const bossAlive = this.ens.some(e => e.boss && !e.dead);
     if (this.pending.length === 0 && this.ens.length === 0) {
+      if (this.endless) {
+        if (this.player && !this.player.dead) {
+          this.interT = 1.6;
+          this.banner('肃清', '深渊将继续坍塌……', 1.4);
+          this.player.heal(12);
+          SFX.play('ok');
+        }
+        return;
+      }
       if (this.waveIdx >= WAVES.length - 1) {
-        this.scene = 'win'; SFX.play('rankup');
-      } else if (!bossAlive) {
+        this.scene = 'win'; SFX.play('rankup');   // 最终波（Boss）被消灭
+      } else {
         this.interT = 1.8;
         this.banner('CLEAN — 区域肃清', '回复少量 HP，准备下一波', 1.7);
         SFX.play('ok');
       }
-    }
-    if (this.waveIdx >= WAVES.length - 1 && !bossAlive) {
-      // boss 被消灭
-      this.scene = 'win';
-      SFX.play('rankup');
     }
   }
 
@@ -292,6 +338,8 @@ class Game {
     if (foe.team === 'player') {
       foe.takeHit(dmg, { dir: src.dir || 0, kb: src.kx || 220, launch: src.launch, ky: src.ky });
     } else {
+      if (src.slow && foe.applySlow) foe.applySlow(src.slow);
+      if (src.freeze && foe.stun !== undefined) foe.stun = Math.max(foe.stun, src.freeze);
       foe.takeHit(dmg, { dir: src.dir || 0, kx: src.kx, ky: src.ky, launch: src.launch });
       if (this.player && !this.player.dead) {
         this.combo++; this.comboT = 1.4;
@@ -332,7 +380,7 @@ class Game {
           s.hitset.add(foe);
           this._applyHit(foe, {
             dmg: s.dmg, dir: Math.sign(foe.x - s.x) || 1, kx: 260, color: s.color, sc: s.sc, sfx: 'boom',
-            launch: s.ky < -160, ky: s.ky,
+            launch: s.ky < -160, ky: s.ky, slow: s.slow, freeze: s.freeze,
           });
         }
       }
@@ -344,7 +392,7 @@ class Game {
         if (foe.dead || b.hitset.has(foe)) continue;
         if (Math.abs(foe.x - b.x) < b.w / 2 + foe.r) {
           b.hitset.add(foe);
-          this._applyHit(foe, { dmg: b.dmg, dir: 0, kx: 100, color: b.color, sc: 7, sfx: 'beam' });
+          this._applyHit(foe, { dmg: b.dmg, dir: 0, kx: 100, color: b.color, sc: 7, sfx: 'beam', slow: b.slow, freeze: b.freeze });
         }
       }
     }
@@ -357,7 +405,7 @@ class Game {
         const fc = { x: UT.clamp(pr.x, foe.rect.l, foe.rect.r), y: UT.clamp(pr.y, foe.rect.t, foe.rect.b) };
         if (UT.d2(fc.x, fc.y, pr.x, pr.y) < pr.r * pr.r) {
           pr.hitset.add(foe);
-          this._applyHit(foe, { dmg: pr.dmg, dir: Math.sign(pr.vx) || 1, kx: 160, color: pr.color, sc: pr.sc, sfx: 'zap' });
+          this._applyHit(foe, { dmg: pr.dmg, dir: Math.sign(pr.vx) || 1, kx: 160, color: pr.color, sc: pr.sc, sfx: 'zap', slow: pr.slow, freeze: pr.freeze });
           if (pr.leech && this.player) this.player.heal(pr.leech);
           if (pr.chain > 0) {
             let best = null, bd = 420 * 420;
@@ -427,11 +475,11 @@ class Game {
     ctx.fillText('选择你的猎魔者', CONFIG.W / 2, 66);
     ctx.font = '16px "Microsoft YaHei",sans-serif'; ctx.fillStyle = '#9a8f80';
     ctx.fillText('←→↑↓ 选择 · Enter 出击', CONFIG.W / 2, 96);
-    const cw = 216, ch = 210, gx = (CONFIG.W - 5 * cw - 4 * 14) / 2, gy0 = 128;
+    const cw = 216, ch = 148, gx = (CONFIG.W - 5 * cw - 4 * 14) / 2, gy0 = 118;
     CHARS.forEach((c, i) => {
-      const row = i < 5 ? 0 : 1;
+      const row = Math.floor(i / 5);
       const col = i % 5;
-      const x = gx + col * (cw + 14), y = gy0 + row * (ch + 16);
+      const x = gx + col * (cw + 14), y = gy0 + row * (ch + 10);
       const on = i === this.sel;
       ctx.fillStyle = on ? 'rgba(255,106,51,.2)' : 'rgba(255,255,255,.045)';
       roundRect(ctx, x, y, cw, ch, 12); ctx.fill();
@@ -439,55 +487,82 @@ class Game {
       ctx.lineWidth = on ? 3 : 1.5;
       roundRect(ctx, x, y, cw, ch, 12); ctx.stroke();
       ctx.fillStyle = c.col.c3; ctx.globalAlpha = on ? 1 : 0.55;
-      ctx.font = 'bold 64px sans-serif';
-      ctx.fillText(c.glyph, x + cw / 2, y + 74 + (on ? -3 : 0));
+      ctx.font = 'bold 46px sans-serif';
+      ctx.fillText(c.glyph, x + cw / 2, y + 60 + (on ? -3 : 0));
       ctx.globalAlpha = 1;
       ctx.fillStyle = on ? '#fff' : '#c9c0b4';
-      ctx.font = 'bold 19px "Microsoft YaHei",sans-serif';
-      ctx.fillText(c.name, x + cw / 2, y + 118);
-      ctx.font = '14px "Microsoft YaHei",sans-serif';
+      ctx.font = 'bold 16px "Microsoft YaHei",sans-serif';
+      ctx.fillText(c.name, x + cw / 2, y + 88);
+      ctx.font = '12px "Microsoft YaHei",sans-serif';
       ctx.fillStyle = '#9a8f80';
-      ctx.fillText(c.en + ' · HP ' + c.hp + ' · 速 ' + c.spd, x + cw / 2, y + 146);
-      ctx.font = '15px "Microsoft YaHei",sans-serif'; ctx.fillStyle = c.col.c3;
-      ctx.fillText(c.skills[0].name + ' / ' + c.skills[1].name, x + cw / 2, y + 172);
+      ctx.fillText(c.en + ' · HP ' + (c.hp + 10) + ' · 速 ' + c.spd, x + cw / 2, y + 108);
+      ctx.font = '13px "Microsoft YaHei",sans-serif'; ctx.fillStyle = c.col.c3;
+      ctx.fillText(c.skills[0].name + ' / ' + c.skills[1].name, x + cw / 2, y + 128);
+      ctx.font = '12px sans-serif'; ctx.fillStyle = '#7d7468';
+      ctx.fillText(c.strat.code.map(k => ARROWS[k]).join('  '), x + cw / 2, y + 144);
     });
     const c = CHARS[this.sel];
     ctx.textAlign = 'left';
     ctx.fillStyle = '#e8dfce'; ctx.font = '17px "Microsoft YaHei",sans-serif';
-    ctx.fillText('「' + c.quip + '」', gx, 610);
+    ctx.fillText('「' + c.quip + '」', gx, 606);
     ctx.fillStyle = '#9a8f80'; ctx.font = '14px "Microsoft YaHei",sans-serif';
-    ctx.fillText('支援律令：' + c.strat.name + ' —— 按 Q 后依次输入 ' + c.strat.code.map(a => ARROWS[a]).join(' '), gx, 640);
-    ctx.fillText('流派对参考：鬼泣连段 / 血咒血技 / 传说极技 / 地狱潜兵支援呼叫', gx, 664);
+    ctx.fillText('支援律令：' + c.strat.name + ' —— 按 Q 后依次输入 ' + c.strat.code.map(a => ARROWS[a]).join(' ') + '　·　奥义：' + c.ult.name, gx, 632);
+    ctx.fillText('流派对参考：鬼泣连段 / 血咒血技 / 传说极技 / 地狱潜兵支援呼叫', gx, 656);
     ctx.textAlign = 'center';
   }
 
   _drawBattle(ctx) {
+    /* --- 战场整体绘制 --- */
     this._drawBg(ctx);
+    /* 时停领域色调 */
+    if (this.dilT > 0) {
+      ctx.globalAlpha = Math.min(0.22, this.dilT * 0.3);
+      ctx.fillStyle = '#7fd0ff';
+      ctx.fillRect(0, 0, CONFIG.W, CONFIG.H);
+      ctx.globalAlpha = 1;
+    }
     for (const z of this.props) z.draw(ctx);
     for (const e of this.ens) e.draw(ctx);
     if (this.player) this.player.draw(ctx);
     for (const h of this.hitboxes) h.draw(ctx);
     for (const pr of this.projs) pr.draw(ctx);
+    /* 低血量警示暗角 */
+    if (this.player && !this.player.dead && this.player.hp / this.player.maxhp < 0.3) {
+      const va = 0.16 + 0.08 * Math.sin(this.battleT * 8);
+      const vg = ctx.createRadialGradient(CONFIG.W / 2, CONFIG.H / 2, 240, CONFIG.W / 2, CONFIG.H / 2, 760);
+      vg.addColorStop(0, 'rgba(0,0,0,0)');
+      vg.addColorStop(1, 'rgba(190,30,50,' + va + ')');
+      ctx.fillStyle = vg; ctx.fillRect(0, 0, CONFIG.W, CONFIG.H);
+    }
     this._drawHUD(ctx);
   }
 
   _drawBg(ctx) {
+    /* 波次进度切换场景调色板：血港(0/1) → 冰蓝走廊(2/3) → 灰烬王座(4)；无尽模式循环 */
+    const PALS = [
+      { s0: '#0b0918', s1: '#20142e', s2: '#341c30', moon: 'rgba(255,190,150,.16)', mFill: 'rgba(255,220,190,.5)', hill: '#171124', tower: '#100d1c', ground: '#191220', edge: '#2c1b2a', lamp: 'rgba(255,106,51,.12)', brazier: '#241820', torch: 'rgba(255,150,70,.8)' },
+      { s0: '#0a0d18', s1: '#101c30', s2: '#1d2740', moon: 'rgba(160,210,255,.18)', mFill: 'rgba(210,235,255,.55)', hill: '#111827', tower: '#0c1220', ground: '#12161e', edge: '#242e3e', lamp: 'rgba(110,190,255,.12)', brazier: '#141c26', torch: 'rgba(140,210,255,.8)' },
+      { s0: '#170a10', s1: '#2a0f14', s2: '#3a1a1a', moon: 'rgba(255,120,90,.2)', mFill: 'rgba(255,170,140,.5)', hill: '#1d0f14', tower: '#16090e', ground: '#1c1214', edge: '#38201e', lamp: 'rgba(255,66,66,.14)', brazier: '#2a1310', torch: 'rgba(255,90,60,.85)' },
+    ];
+    const pi = this.endless ? (this.endlessN % PALS.length)
+      : ([0, 0, 1, 1, 2][UT.clamp(this.waveIdx, 0, 4)] || 0);
+    const PAL = PALS[pi];
     const g = ctx.createLinearGradient(0, 0, 0, CONFIG.FLOOR);
-    g.addColorStop(0, '#0b0918'); g.addColorStop(0.65, '#20142e'); g.addColorStop(1, '#341c30');
+    g.addColorStop(0, PAL.s0); g.addColorStop(0.65, PAL.s1); g.addColorStop(1, PAL.s2);
     ctx.fillStyle = g; ctx.fillRect(0, 0, CONFIG.W, CONFIG.FLOOR);
     // 月
-    ctx.fillStyle = 'rgba(255,190,150,.16)';
+    ctx.fillStyle = PAL.moon;
     ctx.beginPath(); ctx.arc(990, 150, 92, 0, 7); ctx.fill();
-    ctx.fillStyle = 'rgba(255,220,190,.5)';
+    ctx.fillStyle = PAL.mFill;
     ctx.beginPath(); ctx.arc(990, 150, 60, 0, 7); ctx.fill();
     // 远山
-    ctx.fillStyle = '#171124';
+    ctx.fillStyle = PAL.hill;
     ctx.beginPath();
     ctx.moveTo(0, 470); ctx.lineTo(180, 330); ctx.lineTo(360, 460); ctx.lineTo(560, 310);
     ctx.lineTo(760, 470); ctx.lineTo(1000, 340); ctx.lineTo(1280, 470);
     ctx.lineTo(1280, CONFIG.FLOOR); ctx.lineTo(0, CONFIG.FLOOR); ctx.closePath(); ctx.fill();
     // 尖塔群
-    ctx.fillStyle = '#100d1c';
+    ctx.fillStyle = PAL.tower;
     for (let i = 0; i < 7; i++) {
       const bx = 60 + i * 180, bh = 120 + (i % 3) * 70;
       ctx.fillRect(bx, CONFIG.FLOOR - bh - 62, 46, bh + 62);
@@ -496,16 +571,16 @@ class Game {
       ctx.closePath(); ctx.fill();
     }
     // 地面
-    ctx.fillStyle = '#191220'; ctx.fillRect(0, CONFIG.FLOOR, CONFIG.W, CONFIG.H - CONFIG.FLOOR);
-    ctx.fillStyle = '#2c1b2a'; ctx.fillRect(0, CONFIG.FLOOR, CONFIG.W, 12);
-    ctx.fillStyle = 'rgba(255,106,51,.12)';
+    ctx.fillStyle = PAL.ground; ctx.fillRect(0, CONFIG.FLOOR, CONFIG.W, CONFIG.H - CONFIG.FLOOR);
+    ctx.fillStyle = PAL.edge; ctx.fillRect(0, CONFIG.FLOOR, CONFIG.W, 12);
+    ctx.fillStyle = PAL.lamp;
     ctx.fillRect(0, CONFIG.FLOOR + 12, CONFIG.W, 4);
     ctx.strokeStyle = 'rgba(255,255,255,.05)';
     for (let x = 0; x <= CONFIG.W; x += 96) { ctx.beginPath(); ctx.moveTo(x, CONFIG.FLOOR + 14); ctx.lineTo(x - 50, CONFIG.H); ctx.stroke(); }
     // 边界火盆
     for (const x of [26, CONFIG.W - 26]) {
-      ctx.fillStyle = '#241820'; ctx.fillRect(x - 7, CONFIG.FLOOR - 74, 14, 74);
-      ctx.fillStyle = 'rgba(255,150,70,.8)';
+      ctx.fillStyle = PAL.brazier; ctx.fillRect(x - 7, CONFIG.FLOOR - 74, 14, 74);
+      ctx.fillStyle = PAL.torch;
       const fl = 8 + Math.sin(this.battleT * 9 + x) * 4;
       ctx.beginPath(); ctx.arc(x, CONFIG.FLOOR - 80, fl, 0, 7); ctx.fill();
     }
@@ -580,9 +655,9 @@ class Game {
     /* --- 右侧：风格评级 --- */
     const s = this.style, rk = RANKS[s.rank];
     ctx.textAlign = 'right';
-    const pop = Math.min(1, (this.battleT % 10) * 0);
     ctx.fillStyle = rk.c;
-    ctx.font = `italic bold ${128 - rk.l.length * 22 + Math.sin(this.battleT * 8) * 3}px Georgia,serif`;
+    const rsize = (128 - rk.l.length * 22 + Math.sin(this.battleT * 8) * 3) * (1 + this.rankPop * 0.22);
+    ctx.font = `italic bold ${rsize}px Georgia,serif`;
     ctx.shadowColor = rk.c; ctx.shadowBlur = 26;
     ctx.globalAlpha = 0.92;
     ctx.fillText(rk.l, CONFIG.W - 40, 210);
@@ -602,7 +677,7 @@ class Game {
     ctx.fillStyle = 'rgba(255,255,255,.6)';
     ctx.font = 'bold 17px "Microsoft YaHei",sans-serif';
     const w = WAVES[this.waveIdx];
-    ctx.fillText(w ? w.name : '', 26, 34);
+    ctx.fillText(w ? w.name : (this.endless ? '无尽深渊 · 第 ' + this.endlessN + ' 波' : ''), 26, 34);
     /* --- Boss 血条 --- */
     const boss = this.ens.find(e => e.boss);
     if (boss && !boss.dead) {
@@ -694,9 +769,10 @@ class Game {
     ctx.fillText(win ? 'VICTORY — 竞技场肃清' : 'MISSION FAILED', CONFIG.W / 2, 250);
     ctx.fillStyle = '#e8dfce'; ctx.font = '22px "Microsoft YaHei",sans-serif';
     const rk = RANKS[this.style.rank];
-    ctx.fillText(`用时 ${this.battleT.toFixed(1)}s · 击杀 ${this.kills} · 最高连段 ${this.maxCombo} · 最终风格 ${rk.l}`, CONFIG.W / 2, 320);
+    const depth = (this.endless && this.endlessN > 0) ? ' · 抵达无尽第 ' + this.endlessN + ' 波' : '';
+    ctx.fillText(`用时 ${this.battleT.toFixed(1)}s · 击杀 ${this.kills} · 最高连段 ${this.maxCombo} · 最终风格 ${rk.l}${depth}`, CONFIG.W / 2, 320);
     ctx.font = '17px "Microsoft YaHei",sans-serif'; ctx.fillStyle = '#9a8f80';
-    ctx.fillText('Enter 返回角色选择，换一个流派再战', CONFIG.W / 2, 386);
+    ctx.fillText(win ? 'Enter 返回角色选择 ｜ U 直接进入无尽深渊（每波难度递增）' : 'Enter 返回角色选择，换一个流派再战', CONFIG.W / 2, 386);
     ctx.textAlign = 'left';
   }
 }

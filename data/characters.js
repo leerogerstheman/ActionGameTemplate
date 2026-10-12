@@ -547,4 +547,123 @@ const CHARS = [
       });
     } },
 },
+/* ================= 11. 凛冬枪骑（冰枪 / 减速+冻结控场） ================= */
+{
+  id: 'frost', name: '凛冬枪骑·凛', en: 'Frostlance',
+  weap: 'spear', glyph: '❄',
+  col: { c1: '#1c3742', c2: '#9fe8ff', c3: '#d4f6ff', hair: '#cfeef7' },
+  hp: 118, spd: 325,
+  quip: '凛冬，从不迟到。',
+  combo: [
+    M({ n: '霜刺·壹', dur: 0.3, dmg: 8, box: [-105, 135, -82, 0] }),
+    M({ n: '霜刺·贰', dur: 0.3, dmg: 8, box: [-112, 138, -82, 0] }),
+    M({ n: '冰晶横扫', dmg: 12, box: [-150, 158, -86, 0], kx: 190 }),
+    M({ n: '极光终结', dmg: 16, box: [-160, 168, -94, 0], kx: 300, w: 6, sfx: 'heavy' }),
+  ],
+  heavy: M({ n: '冻裂突刺', dur: 0.46, win: [0.2, 0.36], box: [-30, 250, -95, 0], dmg: 20, kx: 360, w: 6, sfx: 'heavy' }),
+  launcher: M({ n: '冰雾喷涌', dur: 0.38, win: [0.12, 0.26], box: [-75, 95, -200, 10], dmg: 11, ky: -700, launch: true, w: 6, sfx: 'launch' }),
+  air: M({ n: '碎冰坠', dur: 0.3, win: [0.06, 0.2], box: [-95, 110, -20, 95], dmg: 11, ky: 250, w: 4 }),
+  skills: [
+    { key: 's1', name: '冰晶投枪', icon: '冰', cd: 6, color: '#9fe8ff',
+      desc: '掷出寒冰长枪，命中使敌人减速 2 秒。',
+      cast(P) {
+        G.proj({ x: P.x + P.facing * 40, y: P.y - 52, vx: P.facing * 900, vy: 0, r: 15, dmg: 15, team: P.team, color: '#d4f6ff', life: 1.1, slow: 2.0, sc: 7 });
+        SFX.play('casting');
+      } },
+    { key: 's2', name: '凛冬领域', icon: '冻', cd: 9, color: '#d4f6ff',
+      desc: '冰封周身：范围内敌人冻结 1.2 秒。',
+      cast(P) {
+        SFX.play('casting'); G.shake(5);
+        G.shock({ x: P.x, y: P.y, team: P.team, r0: 24, r1: 250, dur: 0.4, dmg: 10, ky: -120, color: '#9fe8ff', freeze: 1.2, sc: 6 });
+        G.fx.ring(P.x, P.y - 40, '#d4f6ff', 22, 300);
+      } },
+  ],
+  strat: { name: '支援律令：轨道冻结炮', code: ['U', 'D', 'R'], cd: 17, color: '#9fe8ff',
+    desc: '冻结光束直击敌阵中心。',
+    cast(P) {
+      G.banner('支援律令：轨道冻结炮', '', 1.3); SFX.play('warn');
+      let tx = P.x + P.facing * 260;
+      const foes = G.ens.filter(e => !e.dead);
+      if (foes.length) { let best = foes[0], bd = 1e9; for (const f of foes) { const d = UT.d2(f.x, f.y, P.x, P.y); if (d < bd) { bd = d; best = f; } } tx = best.x; }
+      G.delayed(0.35, () => G.beam({ x: tx, w: 72, warn: 0.5, dur: 0.45, dmg: 18, color: '#c9f2ff', team: P.team, freeze: 1.5, sc: 8 }));
+    } },
+  ult: { name: '奥义·凛冬已至', desc: '三重冰暴把整个战场冻结。',
+    cast(P) {
+      G.slowmo(0.7, 0.3); P.invuln = Math.max(P.invuln, 1.2);
+      G.banner('奥义·凛冬已至', '', 1.3);
+      G.fx.hitFlash(0.4, '#c9f2ff'); SFX.play('beam'); G.shake(12);
+      for (let i = 0; i < 3; i++)
+        G.delayed(i * 0.22, () => G.shock({
+          x: P.x, y: P.y, team: P.team, r0: 30,
+          r1: 320 + i * 130, dur: 0.5, dmg: 12, ky: -420,
+          color: '#c9f2ff', freeze: 1.2, w: 7,
+        }));
+    } },
+},
+/* ================= 12. 时空覆写（双剑 / 时滞残影连斩） ================= */
+{
+  id: 'tempo', name: '时空覆写·零', en: 'Tempo Rewriter',
+  weap: 'twin', glyph: '⧗',
+  col: { c1: '#2a1e4e', c2: '#c9a4ff', c3: '#f0e2ff', hair: '#e6daff' },
+  hp: 100, spd: 390,
+  quip: '时间，站在我这边。',
+  combo: [
+    M({ n: '刃·壹', dur: 0.24, dmg: 7, box: [-100, 118, -80, 0] }),
+    M({ n: '刃·贰', dur: 0.24, dmg: 7, box: [-92, 112, -80, 0] }),
+    M({ n: '剪影三连', dur: 0.3, dmg: 12, box: [-135, 140, -84, 0], kx: 150 }),
+    M({ n: '回环终结', dmg: 15, box: [-150, 155, -90, 0], kx: 290, w: 6, sfx: 'heavy' }),
+  ],
+  heavy: M({ n: '双剪·断界', dur: 0.42, win: [0.18, 0.34], box: [-180, 195, -98, 0], dmg: 20, kx: 360, w: 6, sfx: 'heavy' }),
+  launcher: M({ n: '时跃升斩', dur: 0.32, win: [0.1, 0.22], box: [-68, 88, -215, 10], dmg: 10, ky: -760, launch: true, w: 6, sfx: 'launch' }),
+  air: M({ n: '环刃坠', dur: 0.28, win: [0.06, 0.18], box: [-100, 110, -20, 95], dmg: 10, ky: 240, w: 4 }),
+  skills: [
+    { key: 's1', name: '相位残影', icon: '相', cd: 6, color: '#c9a4ff',
+      desc: '残影穿身三连斩，期间无敌。',
+      cast(P) {
+        G.slowmo(0.25, 0.4); SFX.play('dodge');
+        P.x = UT.clamp(P.x + P.facing * 250, CONFIG.XMIN, CONFIG.XMAX);
+        P.invuln = Math.max(P.invuln, 0.45);
+        G.fx.spark(P.x - P.facing * 100, P.y - 45, '#c9a4ff', 20, 460);
+        _dashHit(P, 0, { count: 3, step: 120, gap: 0.05, dmg: 8, color: '#c9a4ff' });
+      } },
+    { key: 's2', name: '时滞领域', icon: '刻', cd: 10, color: '#f0e2ff',
+      desc: '时停领域 3 秒：敌人行动大幅放缓。',
+      cast(P) {
+        G.dilT = Math.max(G.dilT, 3);
+        G.fx.ring(P.x, P.y - 46, '#f0e2ff', 24, 420);
+        G.fx.text(P.x, P.y - 110, '时停 3 秒!', '#c9a4ff', 20);
+        SFX.play('casting');
+      } },
+  ],
+  strat: { name: '支援律令：相位乱流', code: ['R', 'U', 'L'], cd: 16, color: '#c9a4ff',
+    desc: '时之残像自虚空斩落五连。',
+    cast(P) {
+      G.banner('支援律令：相位乱流', '', 1.2); SFX.play('warn');
+      for (let i = 0; i < 5; i++)
+        G.delayed(0.3 + i * 0.2, () => {
+          const foes = G.ens.filter(e => !e.dead);
+          const e = UT.pick(foes);
+          if (!e) return;
+          G.hitAbs(e.x, e.y - e.h * 0.55, 130, 150, { dmg: 10, kx: 130, dir: P.facing, team: P.team, sfx: 'slash', life: 0.12, color: '#c9a4ff' });
+          G.fx.spark(e.x, e.y - e.h * 0.55, '#c9a4ff', 14, 380);
+        });
+    } },
+  ult: { name: '奥义·终焉回环', desc: '连续覆写 8 次，斩尽残响。',
+    cast(P) {
+      G.slowmo(0.9, 0.28); P.invuln = Math.max(P.invuln, 1.25);
+      G.banner('奥义·终焉回环', '', 1.2);
+      G.fx.hitFlash(0.35, '#c9a4ff'); SFX.play('zap');
+      for (let i = 0; i < 8; i++)
+        G.delayed(0.1 + i * 0.09, () => {
+          let best = null, bd = 1e9;
+          for (const e of G.ens) if (!e.dead) { const d = UT.d2(e.x, e.y, P.x, P.y); if (d < bd) { bd = d; best = e; } }
+          if (!best) return;
+          P.x = UT.clamp(best.x + UT.pick([-44, 44]), CONFIG.XMIN, CONFIG.XMAX);
+          P.facing = Math.sign(best.x - P.x) || 1;
+          G.hitRel(P, P.facing * 45, 0, 135, 155, { dmg: 7, kx: 90, w: 2, sfx: 'slash', life: 0.12 });
+          G.fx.spark(P.x, P.y - 45, '#f0e2ff', 10, 380);
+        });
+      G.delayed(0.9, () => G.hitRel(P, 0, 0, 230, 200, { dmg: 14, kx: 340, w: 8, launch: true, ky: -560, sfx: 'heavy', life: 0.18 }));
+    } },
+},
 ];

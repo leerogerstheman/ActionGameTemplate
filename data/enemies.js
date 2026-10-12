@@ -35,6 +35,18 @@ const MOBS = {
     atk: { n: '砸地', tele: 0.75, dur: 0.25, rec: 0.7, range: 130, payload: 'shock',
       shock: { r1: 300, dur: 0.45, dmg: 12, ky: -420 }, dmg: 12, sfx: 'boom' },
   },
+  lancer: {
+    id: 'lancer', name: '掷矛骷髅', hp: 60, spd: 240, r: 20, h: 56, shape: 'lancer',
+    col: { c1: '#cfc9b4', c2: '#8fd894', eye: '#5fd4a0' }, xp: 14, atkCd: 1.9, keepAway: 1,
+    atk: { n: '骨矛投掷', tele: 0.5, dur: 0.2, rec: 0.5, range: 620, minRange: 240, payload: 'proj',
+      proj: { spd: 560, dmg: 8, r: 12, color: '#e8e6d8', n: 1 }, sfx: 'casting' },
+  },
+  zealot: {
+    id: 'zealot', name: '狂信徒', hp: 70, spd: 430, r: 21, h: 64, shape: 'zealot',
+    col: { c1: '#4a1626', c2: '#ff4d6d', eye: '#ffd23c' }, xp: 16, atkCd: 2.2,
+    atk: { n: '自灭突进', tele: 0.55, dur: 0.45, rec: 0.9, range: 420, payload: 'dash',
+      dash: 700, box: [-50, 80, -70, 0], dmg: 12, sfx: 'heavy' },
+  },
 };
 
 const ELITES = {
@@ -62,6 +74,20 @@ const ELITES = {
         shock: { r1: 360, dur: 0.5, dmg: 12, ky: -300 }, dmg: 12, sfx: 'casting' },
       darts: { n: '幻影飞镖', tele: 0.45, dur: 0.2, rec: 0.45, range: 620, minRange: 140, payload: 'proj',
         proj: { spd: 620, dmg: 10, r: 14, color: '#e08cff', n: 2, spread: 260 }, sfx: 'casting' },
+    },
+  },
+  asura: {
+    id: 'asura', name: '阿修罗机兵', hp: 380, spd: 260, r: 34, h: 110, shape: 'mech',
+    col: { c1: '#2a3138', c2: '#40f0ff', eye: '#ff5566' }, xp: 80, atkCd: 1.5,
+    armorF: 0.35,
+    seq: ['laser', 'missiles', 'stomp'],
+    atks: {
+      laser:   { n: '扫射激光', tele: 0.7, dur: 0.4, rec: 0.6, range: 9999, payload: 'melee',
+        box: [-300, 300, -150, 0], dmg: 18, kx: 280, sfx: 'beam' },
+      missiles:{ n: '轨道导弹', tele: 0.5, dur: 0.25, rec: 0.55, range: 9999, minRange: 90, payload: 'proj',
+        proj: { spd: 420, dmg: 9, r: 15, color: '#ff8c3a', n: 3, spread: 380 }, sfx: 'casting' },
+      stomp:   { n: '践踏冲击', tele: 0.65, dur: 0.3, rec: 0.65, range: 170, payload: 'shock',
+        shock: { r1: 360, dur: 0.5, dmg: 16, ky: -480 }, dmg: 16, sfx: 'boom' },
     },
   },
 };
@@ -102,15 +128,17 @@ const WAVES = [
   ]},
   { name: '第二波 · 邪念增援', sub: '注意远程弹幕', spawns: [
     ['brute', 0.3, 1100], ['caster', 1.2, 200], ['runner', 1.8, 950],
-    ['caster', 2.4, 1080], ['runner', 3.0, 250], ['runner', 3.8, 1000],
+    ['caster', 2.4, 1080], ['lancer', 3.0, 240], ['runner', 3.8, 1000],
+    ['lancer', 4.4, 1060],
   ]},
   { name: '第三波 · 精英来袭', sub: '圣殿看守', elite: 1, spawns: [
     ['warden', 0.5, 1020, 1], ['runner', 2.0, 260], ['runner', 2.6, 1000],
-    ['imp', 3.2, 180], ['imp', 4.0, 1100],
+    ['imp', 3.2, 180], ['zealot', 4.0, 500], ['imp', 4.8, 1100],
   ]},
   { name: '第四波 · 双重威胁', sub: '双精英压阵', elite: 1, spawns: [
     ['warden', 0.5, 1060, 1], ['shrieker', 1.6, 220, 1],
-    ['runner', 3.0, 300], ['caster', 3.6, 1000], ['imp', 4.2, 1060],
+    ['runner', 3.0, 300], ['caster', 3.6, 1000], ['lancer', 4.2, 1060],
+    ['zealot', 4.8, 480],
   ]},
   { name: '最终波 · 灰烬僭主', sub: 'BOSS 摩迪凯降临', boss: 1, spawns: [
     ['boss', 1.0, 1020, 1],
